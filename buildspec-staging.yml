@@ -1,0 +1,36 @@
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - echo "Logging in to Amazon ECR Public..."
+      - echo "Logging in to Amazon ECR (Private)..."
+      - aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 851725533006.dkr.ecr.us-east-1.amazonaws.com
+      - IMAGE_TAG=$(date +%Y%m%d%H%M%S)   
+      - ECR_IMAGE_URI="851725533006.dkr.ecr.us-east-1.amazonaws.com/arfair-staging:$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-8)"
+
+  build:
+    commands:
+      - echo "Building Docker Image..."
+      - docker build -t arfair-staging:latest .
+
+  post_build:
+    commands:
+      - echo "Tagging and Pushing Docker Image..."
+      - docker tag arfair-staging:latest ${ECR_IMAGE_URI}
+      - docker push ${ECR_IMAGE_URI}
+      - echo "Generating imagedefinitions.json for ECS..."
+      # Web App imagedefinitions.json
+      - echo "Generating imagedefinitions.json for Web App ECS..."
+      - printf '[{"name":"Artfair_staging_container","imageUri":"%s"}]' ${ECR_IMAGE_URI} > imagedefinitions.json
+
+
+      # Celery Worker imagedefinitions.json
+      - echo "Generating imagedefinitions.json for Celery Worker ECS..."
+      - printf '[{"name":"Artfair_staging_celery_container","imageUri":"%s"}]' ${ECR_IMAGE_URI} > imagedefinitions_celery.json
+
+
+artifacts:
+  files:
+    - imagedefinitions.json
+    - imagedefinitions_celery.json

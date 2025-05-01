@@ -1,0 +1,73 @@
+[tool.poetry]
+# TODO ⚡ Change the name, version, description, authors, and license of the project
+name = "django-starter-template"
+version = "0.1.7"
+description = "A comprehensive starting point for your new API with Django and DRF"
+authors = ["Carlos <carlos@pythoncheatsheet.org>"]
+license = "MIT"
+readme = "README.md"
+
+packages = [
+    { include = "scripts" }
+]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+django = "^5.1.2"
+django-environ = "^0.11.2"
+django-cors-headers = "^4.5.0"
+django-filter = "^24.3"
+djangorestframework = "^3.15.2"
+whitenoise = "^6.7.0"
+gunicorn = "^23.0.0"
+django-rest-knox = "^5.0.2"
+redis = "^5.1.1"
+celery = "^5.4.0"
+django-celery-beat = "^2.7.0"
+django-celery-results = "^2.5.1"
+sentry-sdk = {extras = ["django"], version = "^2.17.0"}
+django-redis = "^5.4.0"
+drf-spectacular = "^0.28.0"
+boto3 = "^1.35.90"
+pydub = "^0.25.1"
+pandas = "^2.2.3"
+numpy = "^2.2.1"
+datasets = "^3.2.0"
+huggingface-hub = "^0.27.0"
+ffmpeg-python = "^0.2.0"
+django-storages = "^1.14.4"
+psycopg2-binary = "^2.9.10"
+torch = "^2.6.0"
+torchaudio = "^2.6.0"
+torchvision = "^0.21.0"
+soundfile = "^0.13.1"
+requests = "^2.32.3"
+sqlalchemy = "^2.0.39"
+django-allauth = "^65.5.0"
+dj-rest-auth = "^7.0.1"
+djangorestframework-simplejwt = "^5.5.0"
+django-phonenumber-field = {extras = ["phonenumbers"], version = "^8.0.0"}
+cryptography = "^44.0.2"
+twilio = "^9.5.1"
+drf-yasg = "^1.21.10"
+
+
+[tool.poetry.group.dev.dependencies]
+django-debug-toolbar = "^4.4.6"
+pytest = "^8.3.3"
+django-extensions = "^3.2.3"
+pytest-django = "^4.9.0"
+ipykernel = "^6.29.5"
+
+[tool.poetry.scripts]
+server = "scripts.django:runserver"
+makemigrations = "scripts.django:makemigrations"
+migrate = "scripts.django:migrate"
+worker = "scripts.celery:run_worker"
+beat = "scripts.celery:run_beat"
+bump = "scripts.bump:bum_version"
+create_dev_env = "scripts.django:create_dev_env"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

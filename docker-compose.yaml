@@ -1,0 +1,82 @@
+version: "3"
+services:
+  postgresql15:
+    container_name: postgreSQL
+    image:  postgres:15 
+    ports:
+      - "5432:5432" # Default PostgreSQL15 Port
+    restart: always # Always restart the container unless it is stopped manually.
+    volumes:
+      - postgres_data:/var/lib/postgresql/data  # Persist PostgreSQL data on the host.
+    environment:
+      POSTGRES_USER: postgres # Default user.
+      POSTGRES_PASSWORD: password # user password
+      POSTGRES_DB: artfair_db 
+    networks:
+      - shared_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d artfair_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+  
+  redis:
+    container_name: redis_server
+    image: redis:latest
+    ports:
+      - "6379:6379" # Default Redis port mapping.
+    volumes:
+      - /usr/local/redis/data:/data # Persist Redis data on the host.
+      - ./redis.conf:/etc/redis/redis.conf # Mount custom Redis configuration file.
+    restart: always
+    command: redis-server /etc/redis/redis.conf # Start Redis with custom config.
+    networks:
+      - shared_network
+
+  celery_worker:
+    container_name: celery_worker
+    image: artfair/backend
+    build: .
+    command: celery -A conf.celery worker --loglevel=debug
+    depends_on:
+      redis:
+        condition: service_started
+      backend:
+        condition: service_started
+    environment:
+      - PYTHONPATH=/code
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=db+postgresql://postgres:password@postgresql15:5432/artfair_db
+    networks:
+      - shared_network
+
+  backend:
+    container_name: backend
+    image: artfair/backend
+    tty: true
+    build: .
+    ports:
+      - "8000:8000"
+    command: bash -c "python manage.py runserver 0.0.0.0:8000"
+    depends_on:
+      postgresql15:
+        condition: service_healthy
+    environment:
+      - DB_HOST=postgresql15
+      - DB_PORT="5432"
+      - DB_NAME=artfair_db
+      - DB_USER=postgres
+      - DB_PASSWORD=password
+    env_file:
+      - .env
+    networks:
+      - shared_network
+
+networks:
+  shared_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    name: postgres_data

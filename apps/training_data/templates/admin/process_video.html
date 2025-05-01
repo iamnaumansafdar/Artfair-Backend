@@ -1,0 +1,16 @@
+{% extends "admin/base_site.html" %}
+
+{% block object-tools %}
+
+  <form method="post">
+    {% csrf_token %}
+    <h1>Process video {{ video_name }}</h1>
+    <p>Select corresponding caption file</p>
+    <select name="caption_file">
+      {% for file in caption_files %}
+      <option {% if file.id == default_caption_id %}selected{% endif %} value="{{ file.id }}">{{ file.file.name }}</option>
+      {% endfor %}
+    </select>
+    <input type="submit" value="Process Video">
+  </form>
+{% endblock %}

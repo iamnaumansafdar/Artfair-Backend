@@ -1,0 +1,104 @@
+{% extends "admin/base_site.html" %}
+
+{% block extrahead %}
+    <style>
+        /* kept your original button styles */
+        .nextButtonDisabled {
+            width: 3.5rem;
+            height: 2rem;
+            background-color: rgb(221,221,221);
+            border-radius: 10px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: not-allowed;
+            border: none;
+            color: #666;
+        }
+        .nextButtonOn {
+            width: 3.5rem;
+            height: 2rem;
+            background-color: #205067;
+            border-radius: 10px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            color: white;
+            border: none;
+        }
+        button#validateButton {
+            width: 8rem;
+            height: 1.5rem;
+            border-radius: 5px;
+            border: none;
+            color: white;
+            background-color: #205067;
+            cursor: pointer;
+        }
+    </style>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", function() {
+            const input = document.getElementById("searchInput");
+            const validateButton = document.getElementById("validateButton");
+            const nextButton = document.getElementById("nextButton");
+            const message = document.getElementById("email-validation-message");
+            const options = Array.from(document.querySelectorAll("#users option"))
+                                .map(opt => opt.value);
+
+            // Validate that the typed email exactly matches one of the datalist options
+            validateButton.addEventListener("click", function() {
+                const val = input.value.trim();
+                if (!input.checkValidity()) {
+                    message.textContent = "Please enter a valid email address.";
+                    message.style.color = "red";
+                    nextButton.disabled = true;
+                    nextButton.className = "nextButtonDisabled";
+                    return;
+                }
+                if (options.includes(val)) {
+                    message.textContent = "Email is valid! Click Next to continue.";
+                    message.style.color = "green";
+                    nextButton.disabled = false;
+                    nextButton.className = "nextButtonOn";
+                } else {
+                    message.textContent = "User doesn't exist, please select from the list.";
+                    message.style.color = "red";
+                    nextButton.disabled = true;
+                    nextButton.className = "nextButtonDisabled";
+                }
+            });
+
+            // On Next, store and redirect
+            nextButton.addEventListener("click", function() {
+                if (!nextButton.disabled) {
+                    localStorage.setItem("userEmail", input.value.trim());
+                    window.location.href = "{% url 'admin:custom_page1' %}";
+                }
+            });
+        });
+    </script>
+{% endblock %}
+
+{% block content %}
+    <h1>User Search</h1>
+
+    <!-- dropdown input -->
+    <input list="users"
+           type="email"
+           id="searchInput"
+           placeholder="Type or pick an email…"
+           autocomplete="off"
+           required />
+
+    <datalist id="users">
+      {% for user in users %}
+        <option value="{{ user.email }}"></option>
+      {% endfor %}
+    </datalist>
+
+    <button id="validateButton">Validate Email</button>
+    <p id="email-validation-message"></p>
+    <button id="nextButton" class="nextButtonDisabled" disabled>Next</button>
+{% endblock %}

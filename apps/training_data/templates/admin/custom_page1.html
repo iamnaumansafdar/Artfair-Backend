@@ -1,0 +1,334 @@
+{% extends "admin/base_site.html" %}
+
+{% block extrahead %}
+    <!-- 1. Add CSS to <head> -->
+    <link href="https://releases.transloadit.com/uppy/v4.13.0/uppy.min.css" rel="stylesheet">
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <script src="https://cdn.jsdelivr.net/npm/spark-md5@3.0.2/spark-md5.min.js"></script>
+    <!-- 2. Import Uppy script -->
+    <script type="module">
+        import { Uppy, Dashboard, AwsS3 } from "https://releases.transloadit.com/uppy/v4.13.0/uppy.min.mjs";
+        const uppy = new Uppy({
+            restrictions: {
+              // only audio, video or .ass subtitle files allowed
+            allowedFileTypes: [
+                'audio/*',
+                'video/*',
+                '.ass'
+            ]
+            }
+        })
+
+
+        // after you create uppy …
+        uppy.on('restriction-failed', (file, error) => {
+            // this uses Uppy’s built‑in toast
+            uppy.info(error.message, 'error', 5000);
+        });
+
+
+
+        // Generate csrfToken for S3 Upload
+        let csrftoken = null;
+        const csrfElement = document.querySelector('[name=csrfmiddlewaretoken]');
+        
+        if (csrfElement) {
+            csrftoken = csrfElement.value;
+        } else {
+            // Fallback: Try fetching it from a meta tag if it's not in the form
+            const metaTag = document.querySelector('meta[name="csrf-token"]');
+            if (metaTag) {
+                csrftoken = metaTag.getAttribute('content');
+            }
+        }
+
+        // throw on any !res.ok and return parsed JSON
+        async function apiJson(res) {
+            if (!res.ok) {
+              let msg;
+              try {                    // JSON?
+                 const body = await res.clone().json();
+                 msg = body.detail || JSON.stringify(body);
+              } catch {
+                 msg = (await res.text()).slice(0, 200) + '…'; // HTML fallback
+              }
+              throw new Error(`API ${res.status}: ${msg}`);
+            }
+            return res.json().catch(() => ({}));
+        }
+
+        // Set base URLs for API endpoints
+        const apiUrls = {
+            generatePresignedUrl: "{% url 'generate_s3_presigned_url' %}",
+            createS3Multipart: "{% url 'create_s3_multipart' %}",
+            listParts: "{% url 's3_multipart_listParts' uploadId='PLACEHOLDER' %}".replace('PLACEHOLDER', ''),
+            signPart: "{% url 's3_multipart_signPart' uploadId='PLACEHOLDER' partNumber=0 %}".replace('PLACEHOLDER/', '').replace('/0', ''),
+            abortMultipart: "{% url 's3_multipart_abort' uploadId='PLACEHOLDER' %}",
+            completeMultipart: "{% url 's3_multipart_complete' uploadId='PLACEHOLDER' %}",
+            createFileUpload: "{% url 'create_file_upload' %}"
+        };
+
+        // Remove email stored in localStorage when the page is closed
+        window.addEventListener('beforeunload', function () {
+            localStorage.removeItem('userEmail');
+        });
+        // Compute MD5 hash of the file
+        async function computeMD5(file) {
+            const spark = new SparkMD5.ArrayBuffer();
+            const chunkSize = 2 * 1024 * 1024; // 2MB
+            const chunks = Math.ceil(file.size / chunkSize);
+            let currentChunk = 0;
+
+            while (currentChunk < chunks) {
+                const start = currentChunk * chunkSize;
+                const end = Math.min(start + chunkSize, file.size);
+
+                const chunk = await file.slice(start, end).arrayBuffer();
+                spark.append(chunk);
+                currentChunk++;
+            }
+
+            return spark.end();
+        }
+        // Store MD5 hashes of files. Key: file name, Value: MD5 hash
+        const md5Hashes = {};
+        // Modify file name so all files store in AWS bucket has unified format
+        const formatFileName = (file) => {
+            // formatOne is a String that contains the current timestamp and the file name with spaces, %, -, and . replaced with underscores.
+            const formatOne = `${Date.now()}_${file.name.replace(/[\s+%\-]+/g, '_')}`;
+            const formatOneArr = formatOne.split("_");
+            const lastPart = formatOneArr[formatOneArr.length - 1];
+            const indexOfDot = lastPart.indexOf(".");
+            const fileType = lastPart.slice(indexOfDot);
+            formatOneArr[formatOneArr.length - 1] = lastPart.slice(0, indexOfDot);
+            let formatedFileName = "";
+            for (let part of formatOneArr) {
+                // If part contains any characters that is not a letter or a numeber, remove them.
+                part = part.replace(/[^a-zA-Z0-9]/g, "");
+                formatedFileName += part + "_";
+            }
+            return formatedFileName.slice(0, -1) + fileType;
+        }
+        // Add Uppy Dashboard
+        uppy.use(Dashboard, {
+            inline: true,
+            target: '#uppy',
+            replaceTargetContent: true,
+            showProgressDetails: true,
+            note: 'Drag and drop your files here or click to select files.',
+            restrictions: {
+                allowedFileTypes: ['audio/*', 'video/*', '.ass']
+        }
+        })
+        .use(AwsS3, {
+            // The function getUploadParameters is used to upload files with size less than 200MB
+            async getUploadParameters(file) {
+                const fileName = formatFileName(file);
+                md5Hashes[fileName] = await computeMD5(file.data);
+                return fetch(apiUrls.generatePresignedUrl, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        file_name: fileName,
+                        file_type: file.type,
+                    }),
+                    headers: {
+                        'Content-Type': 'application/json',
+                        "X-CSRFToken": csrftoken
+                    },
+                })
+                .then(res => res.json())
+            },
+            shouldUseMultipart(file) {
+		        return file.size > 100 * 2 ** 20;
+            },
+            createMultipartUpload(file) {
+                const fileName = formatFileName(file);
+                let data = {"type": file.type, "file_name": fileName};
+                return fetch(apiUrls.createS3Multipart, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-CSRFToken": csrftoken
+                    },
+                    body: JSON.stringify(data)
+                })
+                .then(res => res.json());
+            },
+            listParts(file, parts) {
+                let data = {"key": parts.key};
+                const url = `${apiUrls.listParts}${parts.uploadId}/`;
+                return fetch(url, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-CSRFToken": csrftoken
+                    },
+                    body: JSON.stringify(data)
+                })
+                .then(res => res.json());
+            },
+            signPart(file, {key, uploadId, partNumber}) {
+                let data = {"key": key};
+                const url = `${apiUrls.signPart}${uploadId}/${partNumber}/`;
+                return fetch(url, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-CSRFToken": csrftoken
+                    },
+                    body: JSON.stringify(data)
+                })
+                .then(res => res.json());
+            },
+            abortMultipartUpload(file, {uploadId, key}) {
+                let data = {"key": key};
+                //const url = `${apiUrls.abortMultipart}${uploadId}/`;
+                const url = apiUrls.abortMultipart.replace('PLACEHOLDER', uploadId);
+                return fetch(url, {
+                    method: "DELETE",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-CSRFToken": csrftoken
+                    },
+                    body: JSON.stringify(data)
+                })
+                .then(res => res.json());
+            },
+            completeMultipartUpload(file, {uploadId, key, parts}) {
+                const formattedParts = parts.map(p => {
+                    let eTag = p.ETag;
+                    eTag = eTag.replace(/^"(.*)"$/, '$1');
+                    return {
+                        "ETag": eTag,
+                        "PartNumber": p.PartNumber
+                    };
+                });
+                let data = {"key": key, "parts": formattedParts};
+                // const url = `${apiUrls.completeMultipart}${uploadId}/`;
+                const url = apiUrls.completeMultipartBase.replace('PLACEHOLDER', uploadId);
+                return fetch(url, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-CSRFToken": csrftoken
+                    },
+                    body: JSON.stringify(data)
+                })
+                .then(apiJson);
+            }
+        });
+
+
+        // Handle completion
+        uppy.on('complete', (result) => {
+            if (result.failed.length > 0) {
+                return;
+            }
+
+
+            // 1) collect all metadata‑POST promises here
+            const savePromises = [];
+            const userEmail = localStorage.getItem("userEmail");
+            const uploadedFiles = result.successful;
+            const audioSet = new Set(["mp3", "wav", "aac"]);
+            const assSet = new Set(["ass"]);
+            const videoSet = new Set(["mp4"]);
+            function getFileType(extension) {
+                const allowedMediaExtensions = {
+                    "audio": audioSet,
+                    "ass": assSet,
+                    "video": videoSet,
+                }
+                if (allowedMediaExtensions["audio"].has(extension)) {
+                    return "audio";
+                }
+                if (allowedMediaExtensions["ass"].has(extension)) {
+                    return "ass";
+                }
+                if (allowedMediaExtensions["video"].has(extension)) {
+                    return "video";
+                }
+                return null;
+            }
+
+            const fileMetaDataArr = [];
+            for (const file of uploadedFiles) {
+                const data = file.response.body;
+                let fileName = data.name;
+                let s3Url = data.S3URL;
+                const extension = file.extension;
+                const fileSize = file.size;
+                const fileType = getFileType(extension);
+                if (fileType == null) {
+                    continue;
+                }
+                const isSourceFile = fileType === "audio" || fileType === "video";
+                // Set file size limit to 100MiB, direct Uppy to use multipart upload only when a file size exceed fileSizeLimitForMultiPartUpload.
+                let fileSizeLimitForMultiPartUpload = 100 * 2 ** 20;
+                if (file.size < fileSizeLimitForMultiPartUpload) {
+                    fileName = data.key;
+                    s3Url = data.location;
+                }
+
+                fileMetaDataArr.push({
+                    s3_url: s3Url,
+                    user_email: userEmail,
+                    original_filename: fileName,
+                    fileType,
+                    fileSize,
+                    isSourceFile,
+                    md5Hash: md5Hashes[fileName],
+                });
+            }
+            // Chunk filemeta data into large bulks to the backend for faster uploading, to be safe, limit the bulk upload to 500 files per request (about 150KB per request)
+            let i = 0;
+            while (i < fileMetaDataArr.length) {
+                const bulk = [];
+                const curEnd = Math.min(i + 500, fileMetaDataArr.length);
+                for (; i < curEnd; i++) {
+                    bulk.push(fileMetaDataArr[i]);
+                }
+                // Make API request to create file entry in the database
+                savePromises.push(
+                    fetch(apiUrls.createFileUpload, {
+                        method: "POST",
+                        body: JSON.stringify(bulk),
+                        headers: {
+                            "Content-Type": "application/json",
+                            "X-CSRFToken": csrftoken
+                        },
+                    })
+                .then(apiJson) 
+                );
+            }
+            // 2) once **all** metadata posts succeed…
+            Promise.all(savePromises)
+                .then(() => {
+                    // Show success toast
+                uppy.info('All files uploaded successfully!', 'success', 4000);
+                // Redirect back to changelist after a moment
+                    setTimeout(() => {
+                    window.location.href = "{% url 'admin:training_data_mediafile_changelist' %}";
+                    }, 1000);
+                })
+                .catch(err => {                
+                    console.error(err);
+                    uppy.info(`Saving metadata failed: ${err.message}`,'error');
+                });
+        });
+
+    </script>
+{% endblock %}
+
+{% block content %}
+    <h1>Upload File to S3</h1>
+    <button
+        id="backButton"
+        onclick="window.location.href = '{% url 'admin:training_data_mediafile_changelist' %}'"
+        style="margin-bottom: 20px; cursor: pointer; border-radius: 5px; padding: 5px 10px; background-color: #205067; color: white; border: none;"
+    >
+        Back To Media files
+    </button>
+    <!-- 3. Initialize Uppy container -->
+    <div id="uppy" style="width: 100%; height: 500px;"></div>
+{% endblock %}
